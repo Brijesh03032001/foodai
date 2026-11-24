@@ -22,6 +22,17 @@
 
 ---
 
+## The hard part
+
+An LLM will produce perfectly valid JSON for a burrito with a modifier that does not exist on the menu.
+Valid structure is not a valid order, and in a marketplace that difference shows up as a customer who
+paid for something the truck cannot make.
+
+The second one: an owner's real question — *why did Tuesday drop?* — never lives in one data source.
+The revenue is in SQL. The reason is in free-text reviews.
+
+---
+
 ## Highlights
 
 - Architected a food-truck platform with **2 Next.js apps**, a **Spring Boot** transaction API, and a **FastAPI** AI service to keep model-heavy reasoning off order workflows, isolating LangChain agents from the backend handling sales and order transactions.
@@ -34,6 +45,20 @@
 - Added a standalone Python import utility that validates and **deduplicates** incoming order records before they reach live order processing, so re-submitted batches cannot double-process.
 
 > All marketplace data is **seeded**: 107 trucks, 635 dishes, 2,622 modifiers, 260 orders, 150 reviews, 179 ingredients, 1,887 recipes. This is a portfolio build, not a production system with real customers.
+
+---
+
+## Agent design
+
+| Layer | How it works here |
+|---|---|
+| **Orchestration** | A **ReAct** owner copilot picks tools per question, with LCEL chains for the deterministic workflows. The tool loop was written by hand first and only then replaced with a prebuilt agent, so the failure modes were visible before they were abstracted away |
+| **Tool interfaces** | 2 tools with distinct jobs — a SQL `sales_stats` tool over 260 seeded orders, and a vector `review_search` tool over 150 seeded reviews |
+| **Retrieval** | Chroma `bge-m3` embeddings across 635 dishes combined with exact metadata filters for diet, price, spice and protein, so fuzzy taste and hard constraints are both respected |
+| **Structured output** | Natural language is converted into a validated `FoodQuery` through 2 structured-output paths before anything touches the catalogue |
+| **Guardrails** | A deterministic **Order Builder** checks every generated line against 2,622 seeded modifiers and returns each one applied or rejected **with a reason**. A human confirms before checkout |
+| **Reporting** | Complaint ranking is map-reduce RAG with LangChain `.batch()` over 150 raw reviews, not one retrieval call pretending to be a report |
+| **When it breaks** | 2 model backends behind a provider factory, plus local mocks, so the customer, owner, order and analytics flows stay reviewable with AI offline |
 
 ---
 
@@ -148,6 +173,19 @@ cd app && ./mvnw spring-boot:run
 ```bash
 cd web && npm install && npm run dev
 ```
+
+---
+
+## 🧩 Part of a series on agents that take actions
+
+|  |  |
+|---|---|
+| [**SlackAgent**](https://github.com/Brijesh03032001/SlackAgent) | 59 tools across 3 apps through one MCP client |
+| [**Aria**](https://github.com/Brijesh03032001/Aria) | 5 agents behind a LangGraph supervisor, gated on spoken confirmation |
+| [**FoodPilot AI**](https://github.com/Brijesh03032001/foodai) | A ReAct copilot plus a validator the LLM cannot talk past  ←  **you are here** |
+| [**TrustMed-AI**](https://github.com/Brijesh03032001/TrustmedAi) | Retrieval you can audit, with an evaluation suite behind it |
+
+How I build these, end to end → **[github.com/Brijesh03032001](https://github.com/Brijesh03032001)**
 
 ---
 
