@@ -7,7 +7,7 @@
 <p align="center">
   <strong>An AI-native operating platform for mobile food businesses.</strong><br/>
   A food-truck marketplace with an <em>AI concierge</em> for customers and an <em>AI operations copilot</em> for owners —
-  built as a forcing function to learn the entire modern agent stack, from LangChain to LangGraph to production microservices.
+  built as a forcing function to learn the whole modern agent stack, from LangChain to LangGraph to production microservices.
 </p>
 
 <p align="center">
@@ -17,334 +17,139 @@
   <img src="https://img.shields.io/badge/FastAPI-async-009688?logo=fastapi&logoColor=white" />
   <img src="https://img.shields.io/badge/Spring_Boot-3-6DB33F?logo=springboot&logoColor=white" />
   <img src="https://img.shields.io/badge/Next.js-16-000000?logo=nextdotjs&logoColor=white" />
-  <img src="https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white" />
   <img src="https://img.shields.io/badge/Chroma-vectors-5A2A9D" />
   <img src="https://img.shields.io/badge/SQLite-analytics-003B57?logo=sqlite&logoColor=white" />
 </p>
 
 ---
 
-## TL;DR
+## Highlights
 
-**FoodPilot is not "a food chatbot using LangChain."** It's a full-stack, four-tier product where every AI abstraction was adopted **only when a real feature forced it** — and every point a framework *stopped being enough* is documented, not hidden. It reads like a product **and** a curriculum.
+- Architected a food-truck platform with **2 Next.js apps**, a **Spring Boot** transaction API, and a **FastAPI** AI service to keep model-heavy reasoning off order workflows, isolating LangChain agents from the backend handling sales and order transactions.
+- Engineered a **ReAct owner copilot** that unifies sales and review analysis, routing questions to a SQL `sales_stats` tool or Chroma-based RAG `review_search` across **260 seeded orders** and **150 seeded reviews**, so owners ask one question instead of checking **2 dashboards**.
+- Validated LLM-generated order lines against **2,622 seeded menu modifiers** with a deterministic **Order Builder**, checking whether requested options actually exist rather than trusting valid JSON, and returning applied or rejected changes with reasons before the customer confirms.
+- Built an **AI Concierge** that converts natural language into a validated `FoodQuery` through **2 structured-output paths**, then retrieves from **635 dishes** using Chroma `bge-m3` embeddings plus exact metadata filters for diet, price, spice and protein.
+- Ranked recurring complaints with **map-reduce RAG** over **150 raw reviews** using LangChain `.batch()`, producing owner-ready review intelligence instead of one-shot retrieval.
+- Turned sales targets into prep plans with an **LCEL workflow** that joins **179 ingredients** with **1,887 recipes** to compute ingredient requirements, shortfalls and supplier needs.
+- Hid **2 model backends** (ASU CreateAI and local Ollama `qwen3:4b`) behind a provider factory with graceful local mocks, so customer, owner, order and analytics flows stay reviewable when AI is offline.
+- Added a standalone Python import utility that validates and **deduplicates** incoming order records before they reach live order processing, so re-submitted batches cannot double-process.
 
-> ⚙️ **4 tiers** — Next.js → Spring Boot → FastAPI → LangChain/LangGraph  ·  📦 **107 trucks · 635 dishes · 2,622 modifiers**  ·  📚 **9 build phases, 2 documented "walls"**  ·  🛟 **degrades to local mocks when the AI is offline**
-
-**What it does**
-
-|  | Feature | In one line |
-|---|---|---|
-| 🧠 | **AI Concierge** | `"cheap spicy vegan lunch under $10"` → validated query → grounded answer via RAG over 635 real dishes |
-| 🛒 | **Order Builder** | a messy multi-part order → structured lines; every modifier resolved against real prices and flagged ✓ / ✗ with a reason |
-| 📊 | **Owner Copilot** | `"why did sales drop?"` → an agent queries **SQL sales + vector reviews**, then synthesizes both |
-| 🔎 | **Review Intelligence** | 150 raw reviews → a ranked, quantified complaint report via map-reduce RAG |
+> All marketplace data is **seeded**: 107 trucks, 635 dishes, 2,622 modifiers, 260 orders, 150 reviews, 179 ingredients, 1,887 recipes. This is a portfolio build, not a production system with real customers.
 
 ---
 
-## Table of contents
-
-- [Why this project exists](#why-this-project-exists)
-- [Feature tour](#feature-tour)
-- [System architecture](#system-architecture)
-- [The AI brain](#the-ai-brain)
-- [Anatomy of one request](#anatomy-of-one-request)
-- [The learning arc — hitting the wall on purpose](#the-learning-arc--hitting-the-wall-on-purpose)
-- [Tech stack](#tech-stack)
-- [Data at a glance](#data-at-a-glance)
-- [Repository layout](#repository-layout)
-- [Getting started](#getting-started)
-- [Roadmap](#roadmap)
-- [Banner image prompt](#banner-image-prompt)
-
----
-
-## Why this project exists
-
-Most people learn LangChain by copying a tutorial. FoodPilot inverts that: it starts from a **real product** with two hard realism anchors and lets those anchors generate the AI problems.
-
-> **Food trucks move.** Location is time-scoped, not a static address.
-> **Things sell out.** Availability and inventory change per-truck, over time.
-
-Those two facts are why the project can't stay a linear chain forever — it *needs* persistent, mutable, branching state, which is exactly the problem LangGraph solves. Rather than assert that, the codebase **walks into the wall** at each phase and writes up what broke ([`LOOP_LIMITATIONS.md`](LOOP_LIMITATIONS.md), [`LANGCHAIN_WALL.md`](LANGCHAIN_WALL.md)). Each `chapter/` doc is a narrated build log of one phase.
-
----
-
-## Feature tour
-
-| Surface | What it does | The AI pattern behind it |
-|---|---|---|
-| **Concierge** | Conversational food search that remembers constraints across turns | Chat model + LCEL + message history + RAG |
-| **Order Builder** | Natural-language order → structured lines + resolved modifiers, with live pricing and a full customizable menu | Structured output under pressure (Pydantic) + deterministic modifier resolver |
-| **Owner Copilot** | "How are sales? What are people complaining about?" | Prebuilt tool-calling agent over **SQL + vector** tools |
-| **Review Intelligence** | 150 reviews → ranked complaint table | Map-reduce RAG as a *reporting* engine (`.batch()`) |
-| **Prep Planner** | "Prepare me for tomorrow" — forecast → ingredients → shortfall → supplier plan | Linear LCEL chain (and where it visibly breaks) |
-
----
-
-## System architecture
-
-Four tiers. The browser never talks to Python directly — the Java gateway is the single front door, owning the sales domain itself (via JDBC) and proxying everything AI-heavy to the Python brain.
+## Architecture
 
 ```mermaid
-flowchart LR
-    subgraph client["🖥️ Client · Next.js 16"]
-        UI["Customer + Owner faces<br/>d3 / Recharts · graceful mock fallback"]
+flowchart TB
+    subgraph Clients
+        C1["Customer app<br/>Next.js 16"]
+        C2["Owner app<br/>Next.js 16"]
     end
 
-    subgraph gw["☕ Gateway · Spring Boot 3 · :8080"]
-        SALES["Sales domain<br/>(JDBC → SQLite)"]
-        PROXY["AI proxy<br/>(RestClient)"]
-    end
+    C1 --> GW["Gateway"]
+    C2 --> GW
 
-    subgraph ai["🐍 AI Service · FastAPI · :8000"]
-        CHAINS["LangChain chains"]
-        AGENTS["LangGraph agents"]
-    end
+    GW --> SB["Spring Boot 3 · :8080<br/>orders · sales · JDBC + HikariCP"]
+    GW --> AI["FastAPI · :8000<br/>async AI service"]
 
-    subgraph brain["🧠 Models + Stores"]
-        CREATEAI["CreateAI<br/>(parse / order / report)"]
-        OLLAMA["Ollama qwen3:4b<br/>(agents / tools)"]
-        CHROMA[("Chroma<br/>vector store")]
-        DB[("SQLite<br/>foodpilot.db")]
-    end
+    AI --> LC["LangChain / LangGraph<br/>LCEL chains"]
+    LC --> CON["AI Concierge<br/>structured FoodQuery"]
+    LC --> COP["ReAct Owner Copilot"]
+    LC --> OB["Order Builder<br/>deterministic validation"]
+    LC --> PREP["Prep Planner<br/>LCEL"]
 
-    UI -- "REST /api/*" --> gw
-    SALES --> DB
-    PROXY -- "HTTP" --> ai
-    CHAINS --> CREATEAI
-    AGENTS --> OLLAMA
-    CHAINS --> CHROMA
-    AGENTS --> CHROMA
-    AGENTS --> DB
+    CON --> CH["Chroma<br/>bge-m3 embeddings<br/>635 dishes"]
+    COP --> TOOL1["SQL tool: sales_stats"]
+    COP --> TOOL2["Vector tool: review_search"]
+    TOOL1 --> DB[("SQLite<br/>orders · reviews · recipes")]
+    TOOL2 --> CH
+    OB --> DB
+    PREP --> DB
 
-    classDef c fill:#E1F2F5,stroke:#2A9D9A,color:#123C4A;
-    classDef g fill:#E8F4EC,stroke:#4F8F68,color:#123C4A;
-    classDef a fill:#FFF0E9,stroke:#FF7043,color:#123C4A;
-    classDef b fill:#FFF6D8,stroke:#123C4A,color:#123C4A;
-    class UI c;
-    class SALES,PROXY g;
-    class CHAINS,AGENTS a;
-    class CREATEAI,OLLAMA,CHROMA,DB b;
+    LC --> PF["Provider factory"]
+    PF --> M1["ASU CreateAI"]
+    PF --> M2["Ollama qwen3:4b"]
+    PF --> MOCK["Local mocks (offline)"]
+
+    SB --> DB
 ```
 
-**Why a Java gateway in front of a Python brain?** To model a realistic polyglot backend: latency-sensitive, plain-SQL analytics stay in a fast typed service; the messy, model-heavy work lives in Python where the ecosystem is. The seam between them is deliberate.
-
----
-
-## The AI brain
-
-The Python service is where the interesting work happens. Two model backends sit behind one factory (`app/llm.py`, `app/createai_llm.py`) so providers can be swapped in one place. Retrieval combines **semantic search + exact metadata filtering** — the fuzzy concepts (cuisine) go to embeddings, the hard constraints (diet, price, spice, protein) go to a metadata `where` clause.
-
-```mermaid
-flowchart TD
-    Q["User text<br/>'spicy vegan lunch under $10'"] --> P{"Structured output"}
-    P -->|native tool-call| S1["with_structured_output<br/>→ FoodQuery"]
-    P -->|text-only model| S2["PydanticOutputParser<br/>→ FoodQuery"]
-    S1 --> FQ["✅ Validated FoodQuery"]
-    S2 --> FQ
-
-    FQ --> R["Retriever"]
-    R --> SEM["Semantic search<br/>(bge-m3 embeddings)"]
-    R --> META["Metadata filter<br/>diet · price · spice · protein"]
-    SEM --> DOCS["Ranked menu Documents"]
-    META --> DOCS
-
-    DOCS --> LLM["Grounded answer<br/>(RECOMMEND_PROMPT)"]
-
-    subgraph agentic["Agentic surface — Owner Copilot"]
-        T1["sales_stats<br/>(SQL)"]
-        T2["review_search<br/>(vector)"]
-        AGENT["ReAct tool loop"]
-        AGENT --> T1
-        AGENT --> T2
-        T1 --> SYNTH["Synthesized answer"]
-        T2 --> SYNTH
-    end
-
-    FQ -.->|"same schemas / data"| agentic
-
-    classDef hot fill:#FFF0E9,stroke:#FF7043,color:#123C4A;
-    classDef cool fill:#E1F2F5,stroke:#2A9D9A,color:#123C4A;
-    classDef ok fill:#E8F4EC,stroke:#4F8F68,color:#123C4A;
-    class Q,LLM,SYNTH hot;
-    class R,SEM,META,DOCS,AGENT,T1,T2 cool;
-    class FQ ok;
-```
-
-**One lesson worth stealing:** `with_structured_output` and `PydanticOutputParser` guarantee the *shape* of the output — they cannot guarantee its *content* is semantically correct. Shape is a framework guarantee; content is a model-capability problem. Telling those two apart is most of the battle.
-
----
-
-## Anatomy of one request
-
-What actually happens when a customer types a messy order into the Order Builder:
+## The owner copilot loop
 
 ```mermaid
 sequenceDiagram
-    participant U as 🧑 User
-    participant W as Next.js
-    participant G as Spring Gateway
-    participant A as FastAPI
-    participant M as LLM + data
+    participant O as Owner
+    participant R as ReAct Copilot
+    participant S as sales_stats (SQL)
+    participant V as review_search (Chroma)
+    participant L as LLM
 
-    U->>W: "3 Kalua Pork, add extra sauce to 1 if ≤ $1"
-    W->>G: POST /api/order/resolve
-    G->>A: proxy POST /order/resolve
-    A->>M: parse → OrderDraftItem (Pydantic)
-    A->>A: resolve_modifications() vs real modifier prices
-    A-->>G: {matched, lines, mods: [applied / rejected + reason]}
-    G-->>W: same JSON
-    W-->>U: structured lines, each mod flagged ✓ / ✗ with why
-    Note over W: If any hop fails → local mock parser,<br/>UI keeps working
+    O->>R: "Why did Tuesday revenue drop?"
+    R->>L: reason about which tool to call
+    L-->>R: call sales_stats
+    R->>S: query 260 seeded orders
+    S-->>R: revenue by day, by dish
+    R->>L: observe, decide next step
+    L-->>R: call review_search
+    R->>V: semantic search over 150 seeded reviews
+    V-->>R: recurring complaint themes
+    R->>L: synthesize both sources
+    L-->>O: one answer with sales + complaint evidence
 ```
 
-Every modification is checked against the truck's **real** modifier data (2,600+ modifiers): "extra sauce" is applied only if its true `price_delta` satisfies the condition; anything that can't apply is returned with a human-readable reason instead of silently dropped.
-
----
-
-## The learning arc — hitting the wall on purpose
-
-The whole point is to feel *why* each abstraction exists. Each phase is a working deliverable **and** a documented "here's what broke."
+## Order validation
 
 ```mermaid
 flowchart LR
-    P1["1 · Structured<br/>output"] --> P2["2 · RAG<br/>retrievers"] --> P3["3 · Memory"]
-    P3 --> P4["4 · Manual<br/>tool loop"] --> P5["5 · Prebuilt<br/>agent"]
-    P5 --> W1{{"🧱 Wall #1<br/>model + loop limits"}}
-    W1 --> P6["6 · Structured<br/>output under<br/>pressure"] --> P7["7 · SQL + RAG<br/>copilot"] --> P8["8 · Review<br/>intelligence"]
-    P8 --> P9["9 · Multi-step<br/>reasoning"] --> W2{{"🧱 Wall #2<br/>chains can't branch,<br/>loop, pause, persist"}}
-    W2 --> LG(["➡️ LangGraph"])
-
-    classDef done fill:#E8F4EC,stroke:#4F8F68,color:#123C4A;
-    classDef wall fill:#FFF0E9,stroke:#FF7043,color:#123C4A;
-    classDef next fill:#E1F2F5,stroke:#2A9D9A,color:#123C4A;
-    class P1,P2,P3,P4,P5,P6,P7,P8,P9 done;
-    class W1,W2 wall;
-    class LG next;
+    NL["Customer: 'burrito, extra guac, no onions'"] --> LLM["LLM structured output"]
+    LLM --> OB{"Order Builder"}
+    OB -->|"check each line"| MOD[("2,622 seeded modifiers")]
+    MOD --> OK["Applied ✓"]
+    MOD --> NO["Rejected ✗ with reason"]
+    OK --> CONF["Human confirmation"]
+    NO --> CONF
+    CONF --> SB["Spring Boot order API"]
 ```
 
-| Phase | Deliverable | The abstraction it forces |
-|---|---|---|
-| 1 | Text → validated `FoodQuery` | Chat models, LCEL, structured output |
-| 2 | Grounded recommendations | RAG: semantic search + metadata filtering |
-| 3 | Multi-turn concierge | Message history / memory |
-| 4 | Hand-written tool loop | Tool binding — see what an agent *automates* |
-| 5 | "FEED ME" prebuilt agent | Agent ceiling → [`LOOP_LIMITATIONS.md`](LOOP_LIMITATIONS.md) |
-| 6 | Order + modifier resolver | Structured output under real-world mess |
-| 7 | Owner Copilot | One agent over **SQL + vector** tools |
-| 8 | Complaint report | Map-reduce RAG via `.batch()` (reporting, not Q&A) |
-| 9 | "Prepare me for tomorrow" | Linear chain — and where it breaks → [`LANGCHAIN_WALL.md`](LANGCHAIN_WALL.md) |
-| → | **LangGraph** | Branch, loop, pause, persist |
-
-Each phase has a full write-up in [`chapter/`](chapter/).
-
 ---
+
+## Services
+
+| Service | Port | Responsibility |
+|---|---|---|
+| `web/` | 3000 | Customer concierge + owner operations, Next.js 16, D3.js + Recharts |
+| `app/` | 8080 | Spring Boot 3 transaction API — orders, sales analytics, JDBC, HikariCP |
+| `ai_service/` | 8000 | FastAPI + LangChain/LangGraph — concierge, copilot, order builder, prep planner |
+| `gateway/` | — | Routing between the product surfaces and the two backends |
+| `data/` | — | Seeded Yelp-style marketplace dataset |
 
 ## Tech stack
 
-| Layer | Technology |
-|---|---|
-| **Frontend** | Next.js 16 · React 19 · TypeScript · Tailwind · Base UI (shadcn) · Framer Motion · d3 + Recharts |
-| **Gateway** | Java 17+ · Spring Boot 3 · Spring Web · JDBC (HikariCP) |
-| **AI service** | Python 3.11 · FastAPI · Uvicorn |
-| **AI framework** | LangChain 1.3 · LangGraph 1.2 · Pydantic |
-| **Models** | ASU CreateAI (hosted) · Ollama `qwen3:4b` (tools) · `bge-m3` (embeddings) |
-| **Data** | SQLite (`foodpilot.db`) · Chroma vector store · JSON seed data |
+**Frontend** Next.js 16 · React · TypeScript · Tailwind CSS · Framer Motion · D3.js · Recharts
+**Transactions** Java · Spring Boot 3 · Spring Web · Spring JDBC · HikariCP
+**AI** Python · FastAPI · Uvicorn · LangChain · LangGraph · LCEL · ReAct tool calling · Pydantic structured output
+**Data** Chroma (bge-m3) · SQLite · Tableau-ready exports
 
----
-
-## Data at a glance
-
-Realistic, cuisine-matched seed data generated from a real Yelp SF food-truck scrape:
-
-| Entity | Count | | Entity | Count |
-|---|--:|---|---|--:|
-| 🚚 Trucks | **107** | | 🧾 Orders | **260** |
-| 🍽️ Menu items | **635** | | 🧩 Modifiers | **2,622** |
-| ⭐ Reviews | **150** | | 🥕 Ingredients | **179** |
-| 📋 Recipes | **1,887** | | | |
-
-`recipes.json` is the hinge that turns "sell 5 bowls" into "need 0.6 kg of X" — the link that makes the Prep Planner possible.
-
----
-
-## Repository layout
-
-```
-foodtruck-cuisine/
-├── app/                 # 🧠 The AI brain (LangChain chains + LangGraph agents)
-│   ├── chains.py            # LCEL pipelines: parse, recommend, classify, order
-│   ├── agent.py             # manual tool loop + prebuilt agents (copilot)
-│   ├── tools.py             # real @tool functions over the data (SQL + JSON)
-│   ├── retrievers.py        # Chroma RAG: semantic + metadata filtering
-│   ├── analytics.py         # map-reduce review reporting
-│   ├── prep.py              # linear prep-planning chain
-│   └── createai_llm.py      # custom ChatCreateAI(BaseChatModel) wrapper
-├── ai_service/          # 🐍 FastAPI service exposing the brain over HTTP
-├── gateway/             # ☕ Spring Boot gateway (SQL sales + AI proxy)
-├── web/                 # 🖥️ Next.js "Sky Market" frontend
-├── data/                # 📦 JSON seed data (trucks, menus, orders, reviews…)
-├── chapter/             # 📖 Narrated build log, one file per phase
-├── main.py              # terminal REPL to drive every phase by hand
-└── FoodPilot_Master_Spec.md   # the full spec + curriculum
-```
-
----
-
-## Getting started
-
-**Prerequisites:** Python 3.11, Node 18+, Java 17+ (Maven), and [Ollama](https://ollama.com) running locally.
+## Quick start
 
 ```bash
-# 0) Python env + deps  (venv is named "cuisine" on purpose)
-python -m venv cuisine && source cuisine/bin/activate
-pip install -r requirements.txt
-
-# Pull local models
-ollama pull qwen3:4b && ollama pull bge-m3
+git clone https://github.com/Brijesh03032001/foodai.git
+cd foodai
 ```
-
-### Drive the AI by hand (terminal-first)
 
 ```bash
-python main.py     # REPL: parse · recommend · tools · FEED ME · order · copilot · report
+cd ai_service && pip install -r requirements.txt && uvicorn main:app --port 8000
 ```
-
-### Run the full product (three terminals, in order)
 
 ```bash
-./scripts/run-ai.sh          # 🐍 AI service   → http://localhost:8000
-./scripts/run-gateway.sh     # ☕ Java gateway  → http://localhost:8080
-cd web && npm install && npm run dev   # 🖥️ Frontend → http://localhost:3000
+cd app && ./mvnw spring-boot:run
 ```
-
-Verify the whole chain is healthy:
 
 ```bash
-curl -s http://localhost:8080/api/health
-# {"gateway":"up","ai":{"status":"ok","service":"foodpilot-ai"}}
+cd web && npm install && npm run dev
 ```
-
-> **Note:** the frontend runs standalone too — if the gateway or AI service is down, screens fall back to local mock data, so you can explore the UI without any backend.
 
 ---
 
-## Roadmap
-
-Beyond finishing the LangGraph phases, the production-hardening path:
-
-- **Models** — swap local Ollama for a hosted frontier model (kills the tool-calling workarounds); stream tokens end-to-end (SSE); add a semantic response cache.
-- **Data** — unify the split JSON/SQLite sources onto one store; migrate SQLite → Postgres + `pgvector` (retire Chroma).
-- **Services** — async FastAPI handlers; background jobs for the review report; auth + rate limiting; Resilience4j circuit breakers on the AI hop.
-- **Frontend** — React Query for fetching/caching; streaming chat UI; optimistic order updates.
-- **Ops** — the missing layer: tests (pytest / vitest / JUnit), Docker Compose one-command boot, CI, and OpenTelemetry tracing.
-
----
-
-## Banner image prompt
-
-The current banner lives at `web/public/images/banner_image.png`. To regenerate it, use this prompt with your image generator of choice (Midjourney / DAL·E / SDXL) at **1600×400**.
-
-> Wide cinematic hero banner, 1600×400, for an AI-native food-truck platform called **FoodPilot**. A stylized modern food truck on the left, softly illuminated, parked on a clean city street at golden hour. Floating around it, glowing holographic UI cards suggesting AI: a chat bubble, a small bar chart, a map pin, a star rating — rendered in a light, airy "sky market" aesthetic. Color palette strictly: petrol blue `#123C4A`, tangerine orange `#FF7043`, turquoise `#2A9D9A`, leaf green `#4F8F68`, butter yellow `#FFD76A`, on a soft misty-blue background `#EEF7F8`. Flat-modern illustration with subtle depth and soft shadows, generous negative space on the right for a title overlay, friendly and premium, no text, no words, no logos. High detail, crisp vector-like edges, tech-startup product banner.
-
-<p align="center"><sub>Built as a hands-on journey from LangChain fundamentals to production agentic AI. 🚚✨</sub></p>
+**Built by [Brijesh Kumar](https://github.com/Brijesh03032001)** · [Portfolio](https://brijeshbuilds.com) · [LinkedIn](https://linkedin.com/in/brijeshkumar03)
